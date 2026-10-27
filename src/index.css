@@ -282,6 +282,15 @@ h1, h2, legend {
 .square.light .coord { color: #6b4a2a; }
 .square.dark .coord { color: #f6ead8; }
 
+.recommendation {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  background: #fffaf3;
+  border: 1px solid #ddcfbc;
+  border-radius: 10px;
+  color: var(--ink);
+}
+
 .arrow-layer {
   position: absolute;
   inset: 0;
@@ -451,9 +460,17 @@ h1, h2, legend {
   border-radius: 10px;
 }
 
+.score-sheet li.current {
+  background: #f3d7a4;
+  border-color: #c99645;
+}
+
 .history .score-sheet button {
   width: auto;
-  display: inline;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
   padding: 0;
   background: transparent;
   border: 0;
@@ -462,6 +479,19 @@ h1, h2, legend {
   font-weight: 600;
   color: inherit;
 }
+
+.review-tag {
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+.review-tag.best,
+.review-tag.excellent { color: var(--valid); }
+.review-tag.good { color: var(--muted); }
+.review-tag.inaccuracy { color: #9a6b12; }
+.review-tag.mistake { color: #b85c12; }
+.review-tag.blunder { color: var(--invalid); }
 
 .history .score-sheet button.current { color: var(--seal); }
 

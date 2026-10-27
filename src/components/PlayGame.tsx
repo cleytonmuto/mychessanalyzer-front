@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { Chess, type PieceSymbol, type Square } from 'chess.js'
-import { listGames, requestEngineMove, savePgn, type SavedGame } from '../api'
+import { listGames, requestEngineMove, reviewPosition, savePgn, type ReviewEval, type SavedGame } from '../api'
 import { parseFen, PIECE_GLYPHS, type PieceCode, type SquareName } from '../position'
 import { flightsFor, SLIDE_MS } from '../solution'
 import Board from './Board'
@@ -30,6 +30,55 @@ type PendingPromotion = {
 }
 
 const DEPTH: Record<Level, number> = { easy: 6, medium: 10, strong: 16 }
+const REVIEW_DEPTH = 10
+
+type MoveJudgment = {
+  label: string
+  kind: 'best' | 'excellent' | 'good' | 'inaccuracy' | 'mistake' | 'blunder'
+  bestSan: string
+}
+
+function whiteCentipawns(evaluation: ReviewEval): number | null {
+  if (evaluation.score_type === 'mate') {
+    if (evaluation.score_value === null || evaluation.score_value === 0) return null
+    const sign = evaluation.score_value > 0 ? 1 : -1
+    return sign * (10000 - Math.min(Math.abs(evaluation.score_value), 50))
+  }
+  if (evaluation.score_type === 'cp') return evaluation.score_value ?? 0
+  return null
+}
+
+function judgeMove(playedSan: string, playedUci: string, whiteMoved: boolean, before: ReviewEval, after: ReviewEval | undefined): MoveJudgment | null {
+  if (!before.best_move_san) return null
+  const bestSan = before.best_move_san
+  if (before.best_move_uci === playedUci || bestSan === playedSan) {
+    return { label: 'Best', kind: 'best', bestSan }
+  }
+  const beforeCp = whiteCentipawns(before)
+  const afterCp = after ? whiteCentipawns(after) : null
+  if (beforeCp === null || afterCp === null) return { label: 'Good', kind: 'good', bestSan }
+  const loss = whiteMoved ? beforeCp - afterCp : afterCp - beforeCp
+  if (loss < 20) return { label: 'Excellent', kind: 'excellent', bestSan }
+  if (loss < 50) return { label: 'Good', kind: 'good', bestSan }
+  if (loss < 100) return { label: 'Inaccuracy', kind: 'inaccuracy', bestSan }
+  if (loss < 200) return { label: 'Mistake', kind: 'mistake', bestSan }
+  return { label: 'Blunder', kind: 'blunder', bestSan }
+}
+
+function judgmentText(played: string, judgment: MoveJudgment): string {
+  if (judgment.kind === 'best') return `${played} is the best move.`
+  const word = judgment.label.toLowerCase()
+  const phrase = judgment.kind === 'excellent' || judgment.kind === 'good' ? word : `${/^[aeiou]/.test(word) ? 'an' : 'a'} ${word}`
+  return `${played} is ${phrase}. The best move was ${judgment.bestSan}.`
+}
+
+function terminalEval(chess: Chess): ReviewEval {
+  if (chess.isCheckmate()) {
+    const whiteMated = chess.turn() === 'w'
+    return { best_move_uci: null, best_move_san: null, score_type: 'mate', score_value: whiteMated ? -1 : 1, depth: 0 }
+  }
+  return { best_move_uci: null, best_move_san: null, score_type: 'cp', score_value: 0, depth: 0 }
+}
 
 const LEVELS: { id: Level; label: string }[] = [
   { id: 'easy', label: 'Easy' },
@@ -205,6 +254,9 @@ export default function PlayGame({ onDraggingChange, clockActive }: PlayGameProp
   const [failed, setFailed] = useState(false)
   const [saved, setSaved] = useState<SavedGame[]>([])
   const [saveNote, setSaveNote] = useState<string | null>(null)
+  const [judgments, setJudgments] = useState<(MoveJudgment | null)[]>([])
+  const [reviewProgress, setReviewProgress] = useState<string | null>(null)
+  const reviewToken = useRef(0)
   const [spent, setSpent] = useState({ w: 0, b: 0 })
   const clockRef = useRef<Clock>({ w: 0, b: 0, running: null, since: 0 })
 
@@ -258,6 +310,36 @@ export default function PlayGame({ onDraggingChange, clockActive }: PlayGameProp
       active = false
     }
   }, [])
+
+  useEffect(() => {
+    if (!reviewOnly || sans.length === 0) return
+    const id = ++reviewToken.current
+    const moves = sans
+    const chess = new Chess()
+    void (async () => {
+      const evaluations: ReviewEval[] = []
+      try {
+        for (let index = 0; index <= moves.length; index += 1) {
+          if (reviewToken.current !== id) return
+          evaluations.push(chess.isGameOver() ? terminalEval(chess) : await reviewPosition(chess.fen(), REVIEW_DEPTH))
+          if (reviewToken.current !== id) return
+          if (index === moves.length) break
+          if (!chess.move(moves[index])) throw new Error('This PGN contains a move that is not legal.')
+          setReviewProgress(index + 1 === moves.length ? 'Finishing the review.' : `Checking move ${index + 2} of ${moves.length}.`)
+        }
+        if (reviewToken.current !== id) return
+        const verbose = replay(moves).history({ verbose: true })
+        setJudgments(moves.map((san, index) => judgeMove(san, verbose[index]?.lan ?? '', index % 2 === 0, evaluations[index], evaluations[index + 1])))
+        setReviewProgress(null)
+      } catch (error) {
+        if (reviewToken.current !== id) return
+        setReviewProgress(error instanceof Error ? error.message : 'The review could not be finished.')
+      }
+    })()
+    return () => {
+      reviewToken.current += 1
+    }
+  }, [reviewOnly, sans])
 
   function publishDrag(next: DragState | null) {
     dragRef.current = next
@@ -316,6 +398,8 @@ export default function PlayGame({ onDraggingChange, clockActive }: PlayGameProp
     setFailed(false)
     setThinking(false)
     setSaveNote(null)
+    setJudgments([])
+    setReviewProgress(null)
     resetClocks('w')
     if (nextSide === 'b') {
       setNotice('Stockfish is thinking…')
@@ -437,6 +521,8 @@ export default function PlayGame({ onDraggingChange, clockActive }: PlayGameProp
     setResult(label)
     setNotice(label)
     setSaveNote(null)
+    setJudgments([])
+    setReviewProgress(moves.length > 0 ? `Checking move 1 of ${moves.length}.` : null)
     resetClocks(null)
   }
 
@@ -573,6 +659,8 @@ export default function PlayGame({ onDraggingChange, clockActive }: PlayGameProp
 
         <section className="history">
           <h2>Moves</h2>
+          {viewPly > 0 && judgments[viewPly - 1] && <p className="recommendation">{judgmentText(sans[viewPly - 1], judgments[viewPly - 1]!)}</p>}
+          {reviewProgress && <p className="playback-note">{reviewProgress}</p>}
           <div className="turn" role="group" aria-label="Replay">
             <button type="button" className="secondary" disabled={viewPly === 0 || thinking} onClick={() => setViewPly(0)}>
               Start
@@ -591,21 +679,30 @@ export default function PlayGame({ onDraggingChange, clockActive }: PlayGameProp
             <p className="prompt">Moves will appear here.</p>
           ) : (
             <ol className="score-sheet">
-              {rows.map((row) => (
-                <li key={row.number}>
-                  <span className="mate-number">{row.number}.</span>
-                  <button type="button" className={viewPly === row.number * 2 - 1 ? 'current' : ''} onClick={() => setViewPly(row.number * 2 - 1)}>
-                    {row.white}
-                  </button>
-                  {row.black ? (
-                    <button type="button" className={viewPly === row.number * 2 ? 'current' : ''} onClick={() => setViewPly(row.number * 2)}>
-                      {row.black}
+              {rows.map((row) => {
+                const whitePly = row.number * 2 - 1
+                const blackPly = row.number * 2
+                const whiteJudgment = judgments[whitePly - 1]
+                const blackJudgment = judgments[blackPly - 1]
+                const rowCurrent = viewPly === whitePly || viewPly === blackPly
+                return (
+                  <li key={row.number} className={rowCurrent ? 'current' : ''} aria-current={rowCurrent ? 'step' : undefined}>
+                    <span className="mate-number">{row.number}.</span>
+                    <button type="button" className={viewPly === whitePly ? 'current' : ''} onClick={() => setViewPly(whitePly)}>
+                      <span>{row.white}</span>
+                      {whiteJudgment && <span className={`review-tag ${whiteJudgment.kind}`}>{whiteJudgment.label}</span>}
                     </button>
-                  ) : (
-                    <span />
-                  )}
-                </li>
-              ))}
+                    {row.black ? (
+                      <button type="button" className={viewPly === blackPly ? 'current' : ''} onClick={() => setViewPly(blackPly)}>
+                        <span>{row.black}</span>
+                        {blackJudgment && <span className={`review-tag ${blackJudgment.kind}`}>{blackJudgment.label}</span>}
+                      </button>
+                    ) : (
+                      <span />
+                    )}
+                  </li>
+                )
+              })}
             </ol>
           )}
         </section>

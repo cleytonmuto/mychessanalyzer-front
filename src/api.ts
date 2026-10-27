@@ -54,6 +54,26 @@ export type PlayReply = {
   depth: number
 }
 
+export type ReviewEval = {
+  best_move_uci: string | null
+  best_move_san: string | null
+  score_type: string
+  score_value: number | null
+  depth: number
+}
+
+export async function reviewPosition(fen: string, depth: number): Promise<ReviewEval> {
+  const response = await fetch(`${API_BASE}/api/review`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fen, depth }),
+  })
+  if (!response.ok) {
+    throw new Error(await errorMessage(response, 'Stockfish could not review this position.'))
+  }
+  return response.json() as Promise<ReviewEval>
+}
+
 export async function requestEngineMove(fen: string, depth: number, sans: string[]): Promise<PlayReply> {
   const response = await fetch(`${API_BASE}/api/play`, {
     method: 'POST',
