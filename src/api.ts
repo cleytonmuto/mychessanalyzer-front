@@ -148,3 +148,63 @@ export async function savePgn(pgn: string): Promise<SavedGame> {
   }
   return response.json() as Promise<SavedGame>
 }
+
+export type RobotSide = 'w' | 'b'
+
+export type RobotSession = {
+  id: string
+  side: RobotSide
+  from_top: boolean
+  fen: string
+  sans: string[]
+  your_turn: boolean
+  thinking: boolean
+  result: string | null
+  review_only: boolean
+  notice: string
+  orientation: 'white' | 'black'
+}
+
+export type RobotCommand = {
+  id: number
+  kind: 'start' | 'move'
+  side: RobotSide | null
+  from_top: boolean | null
+  san: string | null
+}
+
+export async function createRobotSession(): Promise<RobotSession> {
+  const response = await fetch(`${API_BASE}/api/robot/sessions`, { method: 'POST' })
+  if (!response.ok) throw new Error(await errorMessage(response, 'The play window could not be announced.'))
+  return response.json() as Promise<RobotSession>
+}
+
+export async function pushRobotState(id: string, state: Omit<RobotSession, 'id'>): Promise<RobotCommand[]> {
+  const response = await fetch(`${API_BASE}/api/robot/sessions/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(state),
+  })
+  if (!response.ok) throw new Error(await errorMessage(response, 'The play window could not be updated.'))
+  const body = (await response.json()) as { commands: RobotCommand[] }
+  return body.commands
+}
+
+export async function listRobotSessions(): Promise<RobotSession[]> {
+  const response = await fetch(`${API_BASE}/api/robot/sessions`)
+  if (!response.ok) throw new Error(await errorMessage(response, 'Play windows could not be listed.'))
+  return response.json() as Promise<RobotSession[]>
+}
+
+export async function sendRobotCommand(id: string, command: { kind: 'start' | 'move'; side?: RobotSide; from_top?: boolean; san?: string }): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/robot/sessions/${id}/commands`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(command),
+  })
+  if (!response.ok) throw new Error(await errorMessage(response, 'The play window did not accept the command.'))
+}
+
+export async function closeRobotSession(id: string): Promise<void> {
+  await fetch(`${API_BASE}/api/robot/sessions/${id}`, { method: 'DELETE' })
+}

@@ -1,5 +1,6 @@
 import { useEffect, useRef, type PointerEvent } from 'react'
-import { FILES, PIECE_GLYPHS, PIECE_NAMES, RANKS, squareName, type Placement, type SquareName } from '../position'
+import { PieceView } from './PieceView'
+import { FILES, PIECE_NAMES, RANKS, squareName, type Placement, type SquareName } from '../position'
 import { SLIDE_MS, type Flight } from '../solution'
 
 export type Orientation = 'white' | 'black'
@@ -54,7 +55,7 @@ function Flyer({ flight, orientation }: { flight: Flight; orientation: Orientati
   const white = flight.piece === flight.piece.toUpperCase()
   return (
     <span ref={ref} className={white ? 'flyer piece white' : 'flyer piece black'} style={{ left: from.x, top: from.y }}>
-      {PIECE_GLYPHS[flight.piece]}
+      <PieceView code={flight.piece} />
     </span>
   )
 }
@@ -137,7 +138,9 @@ export default function Board({
                 {file === leftFile && <span className="coord rank">{rank}</span>}
                 {rank === bottomRank && <span className="coord file">{file}</span>}
                 {visible && piece && (
-                  <span className={piece === piece.toUpperCase() ? 'piece white' : 'piece black'}>{PIECE_GLYPHS[piece]}</span>
+                  <span className={piece === piece.toUpperCase() ? 'piece white' : 'piece black'}>
+                    <PieceView code={piece} />
+                  </span>
                 )}
                 {targetSet.has(square) && <span className={piece ? 'hint capture' : 'hint'} />}
               </button>

@@ -1,5 +1,6 @@
 import type { PointerEvent } from 'react'
-import { PIECE_GLYPHS, PIECE_NAMES, type PieceCode } from '../position'
+import { PieceView } from './PieceView'
+import { PIECE_NAMES, type PieceCode } from '../position'
 
 const WHITE: PieceCode[] = ['K', 'Q', 'R', 'B', 'N', 'P']
 const BLACK: PieceCode[] = ['k', 'q', 'r', 'b', 'n', 'p']
@@ -20,7 +21,7 @@ export default function PieceTray({ onDragPiece }: PieceTrayProps) {
             aria-label={PIECE_NAMES[piece]}
             onPointerDown={(event) => onDragPiece(piece, event)}
           >
-            {PIECE_GLYPHS[piece]}
+            <PieceView code={piece} />
           </button>
         ))}
       </div>
@@ -33,7 +34,7 @@ export default function PieceTray({ onDragPiece }: PieceTrayProps) {
             aria-label={PIECE_NAMES[piece]}
             onPointerDown={(event) => onDragPiece(piece, event)}
           >
-            {PIECE_GLYPHS[piece]}
+            <PieceView code={piece} />
           </button>
         ))}
       </div>

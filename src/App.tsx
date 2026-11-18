@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { analyzePosition, listAnalyses, listPositions, saveFen, type Analysis, type SavedPosition } from './api'
+import { useBoardStyle } from './boardStyle'
+import { PieceView } from './components/PieceView'
 import Board from './components/Board'
 import PieceTray from './components/PieceTray'
 import PlayGame from './components/PlayGame'
+import RobotGame from './components/RobotGame'
 import {
   buildFen,
   castlingAvailable,
   describePosition,
   emptyPosition,
   parseFen,
-  PIECE_GLYPHS,
   readFenText,
   startingPosition,
   withoutPiece,
@@ -91,11 +93,20 @@ function downloadFen(fen: string) {
   URL.revokeObjectURL(url)
 }
 
+type Mode = 'play' | 'analyze' | 'robot'
+
+function initialMode(): Mode {
+  const value = new URLSearchParams(window.location.search).get('mode')
+  if (value === 'play' || value === 'analyze' || value === 'robot') return value
+  return 'analyze'
+}
+
 function edited(position: Position, placement: Placement): Position {
   return { ...position, placement, enPassant: '-', halfmove: 0 }
 }
 
 export default function App() {
+  const { style, setStyle } = useBoardStyle()
   const [position, setPosition] = useState<Position>(startingPosition)
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
   const [history, setHistory] = useState<Analysis[]>([])
@@ -103,7 +114,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [drag, setDrag] = useState<DragState | null>(null)
   const [playback, setPlayback] = useState<Playback | null>(null)
-  const [mode, setMode] = useState<'play' | 'analyze'>('analyze')
+  const [mode, setMode] = useState<Mode>(initialMode)
   const [blackAtBottom, setBlackAtBottom] = useState(false)
   const [playDragging, setPlayDragging] = useState(false)
   const [positions, setPositions] = useState<SavedPosition[]>([])
@@ -121,7 +132,7 @@ export default function App() {
   const playing = shown && playback.status === 'playing'
 
   useEffect(() => {
-    document.title = mode === 'play' ? 'Play Stockfish' : 'Chess Analyzer'
+    document.title = mode === 'play' ? 'Play Stockfish' : mode === 'robot' ? 'Robot' : 'Chess Analyzer'
   }, [mode])
 
   useEffect(() => {
@@ -338,30 +349,56 @@ export default function App() {
   }
 
   return (
-    <main className={drag || playDragging ? 'app dragging' : 'app'}>
+    <main className={drag || playDragging ? 'app dragging' : 'app'} data-style={style}>
       <div className="layout">
         <header className="header">
           <p className="mark">♞</p>
           <div>
-            <h1>{mode === 'play' ? 'Play Stockfish' : 'Chess Analyzer'}</h1>
+            <h1>{mode === 'play' ? 'Play Stockfish' : mode === 'robot' ? 'Robot' : 'Chess Analyzer'}</h1>
             <p>
               {mode === 'play'
                 ? 'Drag your pieces through a full game. Stockfish plays the other side.'
-                : 'Set up a legal position, then ask Stockfish for the best move.'}
+                : mode === 'robot'
+                  ? 'Choose a Play window in any browser, then set the colors and the board direction.'
+                  : 'Set up a legal position, then ask Stockfish for the best move.'}
             </p>
           </div>
-          <div className="modes" role="tablist" aria-label="Mode">
+          <div className="header-controls">
+            <div className="style-switch" role="group" aria-label="Board style">
+              <span>Style</span>
+              <button type="button" aria-pressed={style === 'default'} onClick={() => setStyle('default')}>
+                Default
+              </button>
+              <button type="button" aria-pressed={style === 'oscar'} onClick={() => setStyle('oscar')}>
+                Oscar
+              </button>
+              <button type="button" aria-pressed={style === 'green'} onClick={() => setStyle('green')}>
+                Green
+              </button>
+              <button type="button" aria-pressed={style === 'gta'} onClick={() => setStyle('gta')}>
+                GTA
+              </button>
+            </div>
+            <div className="modes" role="tablist" aria-label="Mode">
             <button type="button" role="tab" aria-selected={mode === 'play'} onClick={() => setMode('play')}>
               Play
             </button>
             <button type="button" role="tab" aria-selected={mode === 'analyze'} onClick={() => setMode('analyze')}>
               Analyze
             </button>
+            <button type="button" role="tab" aria-selected={mode === 'robot'} onClick={() => setMode('robot')}>
+              Robot
+            </button>
+          </div>
           </div>
         </header>
 
         <div className="play-slot" hidden={mode !== 'play'}>
           <PlayGame onDraggingChange={onPlayDragging} clockActive={mode === 'play'} />
+        </div>
+
+        <div className="play-slot" hidden={mode !== 'robot'}>
+          <RobotGame active={mode === 'robot'} />
         </div>
 
         <div className="analyze-panel" hidden={mode !== 'analyze'}>
@@ -561,7 +598,7 @@ export default function App() {
           className={drag.source.piece === drag.source.piece.toUpperCase() ? 'drag-ghost piece white' : 'drag-ghost piece black'}
           style={{ left: drag.x, top: drag.y }}
         >
-          {PIECE_GLYPHS[drag.source.piece]}
+          <PieceView code={drag.source.piece} />
         </div>
       )}
     </main>

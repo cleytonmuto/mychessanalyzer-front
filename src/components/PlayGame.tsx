@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { Chess, type PieceSymbol, type Square } from 'chess.js'
-import { listGames, requestEngineMove, reviewPosition, savePgn, type ReviewEval, type SavedGame } from '../api'
-import { parseFen, PIECE_GLYPHS, type PieceCode, type SquareName } from '../position'
+import { closeRobotSession, listGames, pushRobotState, requestEngineMove, reviewPosition, savePgn, type RobotCommand, type RobotSession, type ReviewEval, type SavedGame } from '../api'
+import { PieceView } from './PieceView'
+import { parseFen, type PieceCode, type SquareName } from '../position'
 import { flightsFor, SLIDE_MS } from '../solution'
 import Board from './Board'
 
@@ -257,6 +258,21 @@ export default function PlayGame({ onDraggingChange, clockActive }: PlayGameProp
   const [judgments, setJudgments] = useState<(MoveJudgment | null)[]>([])
   const [reviewProgress, setReviewProgress] = useState<string | null>(null)
   const reviewToken = useRef(0)
+  const sessionIdRef = useRef<string | null>(null)
+  const snapshotRef = useRef<() => Omit<RobotSession, 'id'>>(() => ({
+    side: 'w',
+    from_top: false,
+    fen: '',
+    sans: [],
+    your_turn: false,
+    thinking: false,
+    result: null,
+    review_only: false,
+    notice: '',
+    orientation: 'white',
+  }))
+  const commandRef = useRef<(command: RobotCommand) => void>(() => {})
+  const robotLock = useRef(false)
   const [spent, setSpent] = useState({ w: 0, b: 0 })
   const clockRef = useRef<Clock>({ w: 0, b: 0, running: null, since: 0 })
 
@@ -272,6 +288,7 @@ export default function PlayGame({ onDraggingChange, clockActive }: PlayGameProp
     ? [...new Set(game.moves({ square: drag.square as Square, verbose: true }).map((move) => move.to as SquareName))]
     : []
   const statusText = thinking && !slide ? 'Stockfish is thinking…' : viewPly < sans.length || reviewOnly ? (viewPly < sans.length ? moveLabel(sans, viewPly) : (result ?? 'Reviewing a saved game.')) : notice
+  const orientation = (side === 'b') !== fromTop ? 'black' : 'white'
 
   useEffect(() => {
     const clock = clockRef.current
@@ -341,6 +358,109 @@ export default function PlayGame({ onDraggingChange, clockActive }: PlayGameProp
     }
   }, [reviewOnly, sans])
 
+  useEffect(() => {
+    const yourTurn = atLive && !thinking && result === null && !reviewOnly && slide === null && promotion === null && drag === null && game.turn() === side
+    snapshotRef.current = () => ({
+      side,
+      from_top: fromTop,
+      fen: game.fen(),
+      sans,
+      your_turn: yourTurn,
+      thinking,
+      result,
+      review_only: reviewOnly,
+      notice: statusText,
+      orientation,
+    })
+    commandRef.current = (command) => {
+      if (command.kind === 'start' && command.side) {
+        begin(command.side, command.from_top ?? false)
+        return
+      }
+      if (command.kind !== 'move' || !command.san) return
+      const san = command.san
+      if (!clockActive) return
+      if (reviewOnly) {
+        setNotice('That window is reviewing a saved game.')
+        return
+      }
+      if (result) {
+        setNotice('The game is over.')
+        return
+      }
+      if (thinking || slide || promotion) {
+        setNotice('Stockfish is still moving.')
+        return
+      }
+      if (!atLive) {
+        setNotice('Return to the current position.')
+        return
+      }
+      if (drag || robotLock.current) return
+      const chess = replay(sans)
+      if (chess.turn() !== side) {
+        setNotice('It is Stockfish\'s turn.')
+        return
+      }
+      let played: ReturnType<Chess['move']>
+      try {
+        played = chess.move(san)
+      } catch {
+        setNotice(`${san} is not legal.`)
+        return
+      }
+      robotLock.current = true
+      const next = [...sans, played.san]
+      setPromotion(null)
+      setSans(next)
+      setViewPly(next.length)
+      setSourcePgn(null)
+      setSaveNote(null)
+      const done = outcome(replay(next), side, false)
+      setResult(done)
+      if (done) {
+        setNotice(done)
+        return
+      }
+      setNotice('Stockfish is thinking…')
+      void askEngine(next, token.current, side, DEPTH[level])
+    }
+  })
+
+  useEffect(() => {
+    if (!clockActive) {
+      const existing = sessionIdRef.current
+      sessionIdRef.current = null
+      if (existing) void closeRobotSession(existing)
+      return
+    }
+    let cancelled = false
+    const tick = async () => {
+      try {
+        if (!sessionIdRef.current) {
+          const stored = window.sessionStorage.getItem('robot-play-session')
+          sessionIdRef.current = stored && stored.length > 0 ? stored : crypto.randomUUID().slice(0, 8)
+          window.sessionStorage.setItem('robot-play-session', sessionIdRef.current)
+        }
+        const commands = await pushRobotState(sessionIdRef.current, snapshotRef.current())
+        if (cancelled) return
+        robotLock.current = false
+        for (const command of commands) commandRef.current(command)
+      } catch {
+        // The same window id is used on the next check-in.
+      }
+    }
+    void tick()
+    const timer = window.setInterval(() => void tick(), 700)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+      const existing = sessionIdRef.current
+      sessionIdRef.current = null
+      if (existing) void closeRobotSession(existing)
+    }
+  }, [clockActive])
+
   function publishDrag(next: DragState | null) {
     dragRef.current = next
     setDrag(next)
@@ -382,10 +502,11 @@ export default function PlayGame({ onDraggingChange, clockActive }: PlayGameProp
     }
   }
 
-  function begin(nextSide: Side) {
+  function begin(nextSide: Side, nextFromTop = fromTop) {
     const id = ++token.current
     requestId.current += 1
     publishDrag(null)
+    setFromTop(nextFromTop)
     setSide(nextSide)
     setSans([])
     setViewPly(0)
@@ -552,7 +673,6 @@ export default function PlayGame({ onDraggingChange, clockActive }: PlayGameProp
     rows.push({ number: index / 2 + 1, white: sans[index], black: sans[index + 1] ?? '' })
   }
 
-  const orientation = (side === 'b') !== fromTop ? 'black' : 'white'
   const topSide: Side = orientation === 'white' ? 'b' : 'w'
   const bottomSide: Side = topSide === 'w' ? 'b' : 'w'
   const seat = (color: Side, place: 'top' | 'bottom') => (
@@ -590,7 +710,7 @@ export default function PlayGame({ onDraggingChange, clockActive }: PlayGameProp
         {seat(bottomSide, 'bottom')}
         {drag && (
           <div className={drag.piece === drag.piece.toUpperCase() ? 'drag-ghost piece white' : 'drag-ghost piece black'} style={{ left: drag.x, top: drag.y }}>
-            {PIECE_GLYPHS[drag.piece]}
+            <PieceView code={drag.piece} />
           </div>
         )}
       </section>
@@ -628,7 +748,7 @@ export default function PlayGame({ onDraggingChange, clockActive }: PlayGameProp
                 const code = (side === 'w' ? piece.toUpperCase() : piece) as PieceCode
                 return (
                   <button key={piece} type="button" className={side === 'w' ? 'tray-piece white' : 'tray-piece black'} aria-label={name} onClick={() => finishUserMove(promotion.from, promotion.to, piece)}>
-                    {PIECE_GLYPHS[code]}
+                    <PieceView code={code} />
                   </button>
                 )
               })}
